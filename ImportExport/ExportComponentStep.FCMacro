@@ -1,0 +1,431 @@
+#!/usr/bin/python
+#####################################
+# Copyright (c) deep@tensorfield.ag 2022
+# Licensed under LGPL v2
+#
+# This FreeCAD macro dumps out separate STEP files of all parts at a
+# selected hierarchy level from top. A common use case would be to
+# use this macro to extract 3d models of all components placed on a pcb
+#
+# THe hierarchy of document is displayed at a interactive listbox,
+# with the levels to be output highlighed with yellow background.
+#
+# Version history :
+# *1.0: beta release
+#
+#####################################
+
+# -*- coding: utf-8 -*-
+
+__Name__ = 'Export Component Step'
+__Comment__ = 'Export 3d STEP files of objects at selected hierarchy level'
+__Author__ = 'deep@tensorfield.ag'
+__Version__ = '1.0'
+__Date__ = '2022-12-13'
+__License__ = 'LGPL v2'
+__Web__ = 'https://www.freecadweb.org/wiki/Macro_ExportComponentStep'
+__Wiki__ = 'https://www.freecadweb.org/wiki/Macro_ExportComponentStep'
+__Icon__ = ''
+__Help__ = 'Select level & output dir, then click generate to dump STEP files'
+__Status__ = 'Beta'
+__Requires__ = 'FreeCAD >= 0.17'
+__Communication__ = 'https://forum.freecadweb.org/viewtopic.php?tbd'
+__Files__ = ''
+
+import os
+import tempfile
+import FreeCAD as App
+import FreeCADGui as Gui
+
+from PySide import QtGui, QtCore
+from PySide.QtGui import QTreeWidget, QTreeWidgetItem
+from PySide.QtGui import QHeaderView, QTreeWidgetItemIterator
+
+class Utils:
+    """
+    General helper functions
+    """
+    def getInitialOutputDir(self):
+        """
+        assume output dir is where the document was loaded, else random tmp dir
+        TODO: figure out why tempfile ignores env(TMPDIR)
+        """
+        doc = App.ActiveDocument
+        dir = os.path.dirname(doc.FileName)
+        if not dir:
+            dir = tempfile.TemporaryDirectory().name
+        return dir
+
+    def getTopPartsInDocument(self):
+        """
+        instead of using selection from user Gui.Selection.getSelection()
+        just locate top objects in open document and walk down from there
+        """
+        objs = App.ActiveDocument.RootObjects
+        obj_names = [obj.Label for obj in objs]
+        print(f' top model : {obj_names}')
+        return objs
+
+    def roundLen(self, num):
+        """
+        need to deal with special case of +- inf, eg on Datum Planes
+        """
+        for val in ["inf", "-inf"]:
+            if num == float(val):
+                return val
+
+        large_val = 1e100
+        if num > large_val:
+            return "inf"
+        if num < -large_val:
+            return "-inf"
+
+        return str(round(num))
+
+
+class ExportComponentStep:
+    """
+    setupGui is main entry point that creates tree and entry widgets
+    """
+
+    def __init__(self):
+        # output dir for step
+        self.utils = Utils()
+        self.g_selected_directory = self.utils.getInitialOutputDir()
+        self.g_selected_level = "2"    # hier level to dump
+        self.g_objects_to_dump = []    # list of objects to save as STEP
+        self.g_max_level = 0           # max levels of hier in document
+        self.g_gui = {}                # store gui widgets for callbacks
+        self.cols = {                  # order of columns in tree
+            'label': 0, 'type': 1, 'Len': 2, 'XLen': 3, 'YLen': 4, 'ZLen': 5,
+            'level': 6, 'obj': 7}      # undisplayed data colunms
+        self.g_column_count = len(self.cols)
+        self.g_nodes_to_prune = []     # leafs of tree with no shape
+
+    def exportSTEP(self):
+        for obj in self.g_objects_to_dump:
+            filename = os.path.join(
+                    self.g_selected_directory, obj.Label + ".step")
+            filename = os.path.norpath(filename)
+            print(f'exporting {obj.FullName} to {filename}')
+            obj.Shape.exportStep(filename)
+
+    def addChildren(self, objs=None, parent=None, level=0):
+        """
+        add node to tree including name, object type and XYZ lengths
+
+        """
+        #  0      1   2   3    4    5     6   7
+        # label type Len XLen YLen Zlen level obj
+        cols = self.cols
+
+        if level > self.g_max_level:
+            self.g_max_level = level
+
+        for obj in objs:
+            node = QTreeWidgetItem(parent)
+            node.setData(cols['obj'], QtCore.Qt.UserRole, obj)
+            node.setData(cols['level'], QtCore.Qt.UserRole, level)
+            node.setText(cols['label'], obj.Label)
+            # <class 'Sketcher.SketchObject'> -> Sketcher.SketchObject
+            typ = str(type(obj))
+            typ = typ.replace("<class '", "")
+            typ = typ.replace("'>", "")
+            node.setText(cols['type'], typ)
+
+            if hasattr(obj, "Length"):
+                node.setText(cols['Len'], str(obj.Length.Value))
+                node.setTextAlignment(cols['Len'], QtCore.Qt.AlignRight)
+
+            # if isinstance(obj, App.Part):
+            if hasattr(obj, "Shape"):
+                bbox = obj.Shape.BoundBox
+                node.setText(cols['XLen'], self.utils.roundLen(bbox.XLength))
+                node.setText(cols['YLen'], self.utils.roundLen(bbox.YLength))
+                node.setText(cols['ZLen'], self.utils.roundLen(bbox.ZLength))
+
+                node.setTextAlignment(cols['XLen'], QtCore.Qt.AlignRight)
+                node.setTextAlignment(cols['YLen'], QtCore.Qt.AlignRight)
+                node.setTextAlignment(cols['ZLen'], QtCore.Qt.AlignRight)
+
+            """
+            """
+
+            children = obj.ViewObject.claimChildren()
+            self.addChildren(children, parent=node, level=level + 1)
+
+    def iterateOverTree(self, callback, param=None):
+        """
+        https://stackoverflow.com/questions/31434725/iteration-of-a-qtreewidget
+        """
+        gui_tree = self.g_gui["gui_tree"]
+        iterator = QTreeWidgetItemIterator(gui_tree)
+
+        while iterator.value():
+            node = iterator.value()
+            callback(node, param)
+            iterator += 1
+
+    def cbExpandTreeByLevel(self, node, expand_to_level):
+        """
+        """
+        level = node.data(self.cols['level'], QtCore.Qt.UserRole)
+        if level < expand_to_level:
+            node.setExpanded(True)
+
+    def cbSelectNodesBySelectedLevel(self, node, param):
+        """
+        """
+        sel_bgcolor = "yellow"
+
+        level = node.data(self.cols['level'], QtCore.Qt.UserRole)
+        # "ALL" is the only non integerable string allowed in level
+        for i in range(self.g_column_count):
+            node.setData(i, QtCore.Qt.BackgroundRole, None)
+        if (self.g_selected_level == "ALL") or \
+           (int(self.g_selected_level) == level):
+            obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
+            if hasattr(obj, "Shape"):
+                for i in range(self.g_column_count):
+                    node.setBackgroundColor(i, QtGui.QColor(sel_bgcolor))
+                self.g_objects_to_dump.append(obj)
+
+    def cbSelectNonShapeNode(self, node, param):
+        """
+        """
+        if node.childCount() > 0:
+            return
+
+        level = node.data(self.cols['level'], QtCore.Qt.UserRole)
+        if level < 2:
+            return
+
+        obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
+        if hasattr(obj, "Shape"):
+            return
+
+        self.g_nodes_to_prune.append(node)
+
+    def pruneNonShapeNodes(self):
+        """
+        keep running until no leaf node without shape remains
+        """
+        self.g_nodes_to_prune = []
+        self.iterateOverTree(self.cbSelectNonShapeNode)
+        if self.g_nodes_to_prune:
+            for node in self.g_nodes_to_prune:
+                parent = node.parent()
+                parent.removeChild(node)
+            self.pruneNonShapeNodes()   # run again to cleanup dangling parent
+
+    def populateTree(self):
+        """Updates hier listbox tree"""
+
+        objs = self.utils.getTopPartsInDocument()
+
+        gui_tree = self.g_gui["gui_tree"]
+        gui_tree.clear()
+        root = gui_tree.invisibleRootItem()
+        self.addChildren(objs, parent=root, level=0)
+
+        # remove leaf nodes without shapes
+        self.pruneNonShapeNodes()
+
+        # gui_tree.expandAll() or
+        expand_to_level = self.g_max_level
+        if expand_to_level > 3:
+            expand_to_level = 3
+        self.iterateOverTree(self.cbExpandTreeByLevel, expand_to_level)
+
+    def pretendLevelChanged(self):
+        """Updates hier listbox tree"""
+        # force level changed update callback
+        self.g_selected_level = -1
+        self.onLevelChanged()
+
+    def onDirDialogPopup(self):
+        """Called selecting dir"""
+        gui_dir_line = self.g_gui["gui_dir_line"]
+        self.g_selected_directory = QtGui.QFileDialog.getExistingDirectory()
+        gui_dir_line.setText(self.g_selected_directory)
+
+    def onDirLineEdited(self):
+        """ selected level changed """
+        gui_dir_line = self.g_gui["gui_dir_line"]
+        self.g_selected_directory = str(gui_dir_line.text())
+
+    def onLevelChanged(self):
+        """ selected level changed """
+        gui_sel_level = self.g_gui["gui_sel_level"]
+        current_selected_level = gui_sel_level.currentText()
+        if self.g_selected_level != current_selected_level:
+            self.g_selected_level = current_selected_level
+            # highlight levels to be output
+            self.g_objects_to_dump = []
+            self.iterateOverTree(self.cbSelectNodesBySelectedLevel)
+            # update button text with number of files to generate
+            num = len(self.g_objects_to_dump)
+            gui_gen_run = self.g_gui["gui_gen_run"]
+            gui_gen_run.setText(f'Generate {num} STEP files')
+
+    def onGenerate(self):
+        """Called when generating step files"""
+        gui_dir_line = self.g_gui["gui_dir_line"]
+        self.g_selected_directory = str(gui_dir_line.text())
+        if not os.path.isdir(self.g_selected_directory):
+            msg = f'ERROR: dir does not exist - {self.g_selected_directory}'
+            print(msg)
+            App.Console.PrintError(msg + "\n")
+            return
+        self.exportSTEP()
+
+    def treeSelection(self, selected, deselected):
+        gui_tree = self.g_gui["gui_tree"]
+        Gui.Selection.clearSelection()
+        for node in gui_tree.selectedItems():
+            obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
+            Gui.Selection.addSelection(obj)
+
+    def setButtonStyle(self, btns):
+        """
+        make all buttons look the same
+
+        """
+        stylesheet = """
+        QPushButton {
+            background-color: rgb(220, 225, 225);
+            border: 2px outset rgb(150, 155, 155);
+            border-radius: 5px;
+            min-width: 80px;
+            padding: 5px;
+        }
+        QPushButton:pressed {
+            background-color: rgb(195, 200, 200);
+            border: 2px inset  rgb(150, 155, 155);
+        }
+        QPushButton:hover {
+            background-color:rgb(240, 240, 240)
+        }
+        QPushButton:checked{
+            background-color: rgb(195, 200, 200);
+            border: 2px inset  rgb(150, 155, 155);
+        }
+        """
+
+        for btn in btns:
+            btn.setStyleSheet(stylesheet)
+            # https://stackoverflow.com/questions/56478207/why-is-the-first-button-blue-in-color-when-i-run-the-pyqt5-program
+            btn.setFocusPolicy(QtCore.Qt.NoFocus)
+
+    def setupGui(self):
+        """
+        first setup tree to determine depth and other stats
+        then create top gui elements to prompt for output dir
+        and number of levels to export
+        """
+        gui_tree = QTreeWidget()
+        self.g_gui["gui_tree"] = gui_tree
+
+        self.populateTree()
+
+        gui_tree.setColumnCount(self.g_column_count)
+        gui_tree.setHeaderLabels(
+                ["Name", "Type", "Len", "XLen", "YLen", "ZLen"])
+        gui_tree.setColumnHidden(self.cols['obj'], True)   # hide data
+        gui_tree.setColumnHidden(self.cols['level'], True)
+        gui_tree.setSortingEnabled(True)
+
+        header = gui_tree.header()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(self.cols['label'], QHeaderView.Stretch)
+        gui_tree.resizeColumnToContents(self.cols['label'])
+        gui_tree.selectionModel().selectionChanged.connect(
+                self.treeSelection)
+
+        gui_tree.setMinimumWidth(Gui.getMainWindow().width()/2)
+        gui_tree.setMinimumHeight(Gui.getMainWindow().height()/2)
+
+        # Build UI and show
+        gui_dlg = QtGui.QDialog(Gui.getMainWindow(), QtCore.Qt.Tool)
+
+        gui_sel_level = QtGui.QComboBox(gui_dlg)
+        self.g_gui["gui_sel_level"] = gui_sel_level
+        gui_sel_level.addItems([str(e) for e in range(self.g_max_level)])
+        gui_sel_level.addItem("ALL")
+        if self.g_selected_level == "ALL":
+            gui_sel_level.setCurrentIndex(-1)
+        else:
+            gui_sel_level.setCurrentIndex(int(self.g_selected_level))
+        gui_sel_level.currentTextChanged.connect(self.onLevelChanged)
+
+        # editable line to hold target dir
+        gui_dir_line = QtGui.QLineEdit(self.g_selected_directory, gui_dlg)
+        self.g_gui["gui_dir_line"] = gui_dir_line
+        # gui_dir_line.returnPressed.connect(self.onDirLineEdited)
+
+        gui_dir_sel = QtGui.QPushButton("Select Output Dir", gui_dlg)
+        gui_dir_sel.clicked.connect(self.onDirDialogPopup)
+        self.g_gui["gui_dir_sel"] = gui_dir_sel
+
+        gen_layout = QtGui.QHBoxLayout()
+        gen_layout.addWidget(gui_dir_sel)
+        gen_layout.addWidget(gui_dir_line)
+        gen_layout.addWidget(QtGui.QLabel("Level : "))
+        gen_layout.addWidget(gui_sel_level)
+
+        button_box = QtGui.QDialogButtonBox()
+
+        gui_gen_run = button_box.addButton(
+                "Generate STEP", QtGui.QDialogButtonBox.AcceptRole)
+        self.g_gui["gui_gen_run"] = gui_gen_run
+        gui_btn_close = button_box.addButton(
+                "Close", QtGui.QDialogButtonBox.RejectRole)
+
+        gui_btn_expand = button_box.addButton(
+                "Expand Tree", QtGui.QDialogButtonBox.ApplyRole)
+        gui_btn_collapse = button_box.addButton(
+                "Collapse Tree", QtGui.QDialogButtonBox.ApplyRole)
+
+        gui_btn_expand.clicked.connect(gui_tree.expandAll)
+        gui_btn_collapse.clicked.connect(gui_tree.collapseAll)
+
+        button_box.accepted.connect(self.onGenerate)
+        button_box.rejected.connect(gui_dlg.reject)
+
+        dlg_layout = QtGui.QVBoxLayout(gui_dlg)
+        dlg_layout.insertLayout(0, gen_layout)
+        dlg_layout.addWidget(gui_tree)
+        dlg_layout.addWidget(button_box)
+        # dlg_layout.addWidget(close_dlg_but)
+
+        # set all button styles the same
+        self.setButtonStyle(
+         [gui_dir_sel,
+          gui_btn_expand, gui_btn_collapse, gui_btn_close, gui_gen_run, ])
+
+        self.pretendLevelChanged()
+        gui_tree.show()
+        gui_dlg.exec_()
+
+
+def main():
+    """
+
+    """
+    if not App.GuiUp:
+        print("rerun when gui is up...")
+        return
+
+    if not App.ActiveDocument:
+        print("""
+        There is no opened document.
+        Please open a doc or import a STEP file before running this macro.
+        """)
+        return
+
+    e = ExportComponentStep()
+    e.setupGui()
+
+
+main()
