@@ -34,6 +34,8 @@ __Files__ = ''
 
 import os
 import tempfile
+from collections import defaultdict
+
 import FreeCAD as App
 import FreeCADGui as Gui
 
@@ -85,6 +87,9 @@ class Utils:
 
 
 class Tree(QTreeWidget):
+    """
+    wrapper for QTreeWidget with functions to populate and markup elements
+    """
     def __init__(self):
         super(Tree, self).__init__()
         self.g_objects_to_dump = []    # list of objects to save as STEP
@@ -94,8 +99,36 @@ class Tree(QTreeWidget):
         self.g_column_count = len(self.cols)
         self.g_max_level = 0           # max levels of hier in document
         self.g_selected_level = "2"    # hier level to dump
-        self.g_nodes_to_prune = []
+        self.g_nodes_to_prune = []     # leafs of tree with no shape
+        self.g_initial_open_nodes = 30  # open tree nodes on startup
         self.utils = Utils()
+        self.setupTreeGui()
+        self.populateTree()
+
+    def setupTreeGui(self):
+        self.setColumnCount(self.g_column_count)
+        # TODO: use first 6 keys of self.cols
+        self.setHeaderLabels(
+                ["Name", "Type", "Len", "XLen", "YLen", "ZLen"])
+        self.setColumnHidden(self.cols['obj'], True)   # hide data
+        self.setColumnHidden(self.cols['level'], True)
+        self.setSortingEnabled(True)
+
+        header = self.header()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(self.cols['label'], QHeaderView.Stretch)
+        self.resizeColumnToContents(self.cols['label'])
+        self.selectionModel().selectionChanged.connect(self.treeSelection)
+
+        self.setMinimumWidth(Gui.getMainWindow().width()/2)
+        self.setMinimumHeight(Gui.getMainWindow().height()/2)
+
+    def treeSelection(self, selected, deselected):
+        Gui.Selection.clearSelection()
+        for node in self.selectedItems():
+            obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
+            Gui.Selection.addSelection(obj)
 
     def populateTree(self):
         """
@@ -111,10 +144,11 @@ class Tree(QTreeWidget):
         # remove leaf nodes without shapes
         self.pruneNonShapeNodes()
 
-        # expand to some sensible level by default
-        # TODO: expand to level to fill a page...
-        expand_to_level = self.g_max_level if (self.g_max_level < 3) else 3
-        self.iterateOverTree(self.cbExpandTreeByLevel, expand_to_level)
+        # determine max level of hier after pruning
+        self.determineMaxLevel()
+
+        # open some top level tree elements
+        self.expandTreeToSensibleLevel()
 
     def addChildren(self, objs=None, parent=None, level=0):
         """
@@ -124,9 +158,6 @@ class Tree(QTreeWidget):
         #  0      1   2   3    4    5     6   7
         # label type Len XLen YLen Zlen level obj
         cols = self.cols
-
-        if level > self.g_max_level:
-            self.g_max_level = level
 
         for obj in objs:
             node = QTreeWidgetItem(parent)
@@ -154,10 +185,19 @@ class Tree(QTreeWidget):
                 node.setTextAlignment(cols['YLen'], QtCore.Qt.AlignRight)
                 node.setTextAlignment(cols['ZLen'], QtCore.Qt.AlignRight)
 
-            """
-            """
+            # walk down freecad obj children list
             children = obj.ViewObject.claimChildren()
             self.addChildren(children, parent=node, level=level + 1)
+
+    def iterateOverTree(self, callback, param=None):
+        """
+        https://stackoverflow.com/questions/31434725/iteration-of-a-qtreewidget
+        """
+        iterator = QTreeWidgetItemIterator(self)
+        while iterator.value():
+            node = iterator.value()
+            callback(node, param)
+            iterator += 1
 
     def pruneNonShapeNodes(self):
         """
@@ -171,44 +211,9 @@ class Tree(QTreeWidget):
                 parent.removeChild(node)
             self.pruneNonShapeNodes()   # run again to cleanup dangling parent
 
-    def iterateOverTree(self, callback, param=None):
-        """
-        https://stackoverflow.com/questions/31434725/iteration-of-a-qtreewidget
-        """
-        iterator = QTreeWidgetItemIterator(self)
-
-        while iterator.value():
-            node = iterator.value()
-            callback(node, param)
-            iterator += 1
-
-    def cbExpandTreeByLevel(self, node, expand_to_level):
-        """
-        """
-        level = node.data(self.cols['level'], QtCore.Qt.UserRole)
-        if level < expand_to_level:
-            node.setExpanded(True)
-
-    def cbSelectNodesBySelectedLevel(self, node, param):
-        """
-        """
-        sel_bgcolor = "yellow"
-
-        level = node.data(self.cols['level'], QtCore.Qt.UserRole)
-        # "ALL" is the only non integerable string allowed in level
-        for i in range(self.g_column_count):
-            node.setData(i, QtCore.Qt.BackgroundRole, None)
-        if self.g_selected_level:
-            if (self.g_selected_level == "ALL") or \
-               (int(self.g_selected_level) == level):
-                obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
-                if hasattr(obj, "Shape"):
-                    for i in range(self.g_column_count):
-                        node.setBackgroundColor(i, QtGui.QColor(sel_bgcolor))
-                    self.g_objects_to_dump.append(obj)
-
     def cbSelectNonShapeNode(self, node, param):
         """
+        tree iteration callback for making a list of leaf nodes without shapes
         """
         if node.childCount() > 0:
             return
@@ -223,10 +228,65 @@ class Tree(QTreeWidget):
 
         self.g_nodes_to_prune.append(node)
 
+    def determineMaxLevel(self):
+        self.g_max_level = 0
+        self.iterateOverTree(self.cbDetermineMaxLevel)
+
+    def cbDetermineMaxLevel(self, node, param):
+        """
+        tree iteration callback for determining max level
+        """
+        level = node.data(self.cols['level'], QtCore.Qt.UserRole)
+        if level > self.g_max_level:
+            self.g_max_level = level
+
+    def expandTreeToSensibleLevel(self):
+        # expand to some level initially
+        elements_per_level = defaultdict(list)
+        iterator = QTreeWidgetItemIterator(self)
+        while iterator.value():
+            node = iterator.value()
+            level = node.data(self.cols['level'], QtCore.Qt.UserRole)
+            elements_per_level[level].append(node)
+            iterator += 1
+
+        # expand until counter exhausted
+        expand_counter = self.g_initial_open_nodes
+        for level in sorted(elements_per_level.keys()):
+            for node in elements_per_level[level]:
+                node.setExpanded(True)
+                expand_counter -= node.childCount()
+                if expand_counter < 0:
+                    return
+
     def changeSelectedLevel(self, level):
         self.g_selected_level = level
         self.g_objects_to_dump = []
         self.iterateOverTree(self.cbSelectNodesBySelectedLevel)
+
+    def highlightNode(self, node):
+        sel_bgcolor = "yellow"
+        for i in range(self.g_column_count):
+            node.setBackgroundColor(i, QtGui.QColor(sel_bgcolor))
+
+    def unhighlightNode(self, node):
+        for i in range(self.g_column_count):
+            node.setData(i, QtCore.Qt.BackgroundRole, None)
+
+    def cbSelectNodesBySelectedLevel(self, node, param):
+        """
+        tree iteration callback collecting list of STEP objects to dump
+        """
+        self.unhighlightNode(node)
+        if self.g_selected_level:
+            # "ALL" is the only non-int string allowed in g_selected_level
+            level = node.data(self.cols['level'], QtCore.Qt.UserRole)
+            if (self.g_selected_level == "ALL") or \
+               (int(self.g_selected_level) == level):
+                obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
+                if hasattr(obj, "Shape"):
+                    self.highlightNode(node)
+                    self.g_objects_to_dump.append(obj)
 
 
 class ExportComponentStep:
@@ -239,20 +299,14 @@ class ExportComponentStep:
         self.utils = Utils()
         self.g_selected_directory = self.utils.getInitialOutputDir()
         self.g_selected_level = "2"    # hier level to dump
-        self.g_max_level = 0           # max levels of hier in document
         self.g_gui = {}                # store gui widgets for callbacks
-        self.cols = {                  # order of columns in tree
-            'label': 0, 'type': 1, 'Len': 2, 'XLen': 3, 'YLen': 4, 'ZLen': 5,
-            'level': 6, 'obj': 7}      # undisplayed data colunms
-        self.g_column_count = len(self.cols)
-        self.g_nodes_to_prune = []     # leafs of tree with no shape
 
     def exportSTEP(self):
         gui_tree = self.g_gui["gui_tree"]
         for obj in gui_tree.g_objects_to_dump:
             filename = os.path.join(
                     self.g_selected_directory, obj.Label + ".step")
-            filename = os.path.norpath(filename)
+            filename = os.path.normpath(filename)
             print(f'exporting {obj.FullName} to {filename}')
             obj.Shape.exportStep(filename)
 
@@ -292,13 +346,6 @@ class ExportComponentStep:
             App.Console.PrintError(msg + "\n")
             return
         self.exportSTEP()
-
-    def treeSelection(self, selected, deselected):
-        gui_tree = self.g_gui["gui_tree"]
-        Gui.Selection.clearSelection()
-        for node in gui_tree.selectedItems():
-            obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
-            Gui.Selection.addSelection(obj)
 
     def pretendLevelChanged(self):
         """Updates hier listbox tree"""
@@ -346,33 +393,12 @@ class ExportComponentStep:
         gui_tree = Tree()
         self.g_gui["gui_tree"] = gui_tree
 
-        gui_tree.populateTree()
-
-        gui_tree.setColumnCount(self.g_column_count)
-        gui_tree.setHeaderLabels(
-                ["Name", "Type", "Len", "XLen", "YLen", "ZLen"])
-        gui_tree.setColumnHidden(self.cols['obj'], True)   # hide data
-        gui_tree.setColumnHidden(self.cols['level'], True)
-        gui_tree.setSortingEnabled(True)
-        self.g_max_level = gui_tree.g_max_level
-
-        header = gui_tree.header()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(self.cols['label'], QHeaderView.Stretch)
-        gui_tree.resizeColumnToContents(self.cols['label'])
-        gui_tree.selectionModel().selectionChanged.connect(
-                self.treeSelection)
-
-        gui_tree.setMinimumWidth(Gui.getMainWindow().width()/2)
-        gui_tree.setMinimumHeight(Gui.getMainWindow().height()/2)
-
         # Build UI and show
         gui_dlg = QtGui.QDialog(Gui.getMainWindow(), QtCore.Qt.Tool)
 
         gui_sel_level = QtGui.QComboBox(gui_dlg)
         self.g_gui["gui_sel_level"] = gui_sel_level
-        gui_sel_level.addItems([str(e) for e in range(self.g_max_level)])
+        gui_sel_level.addItems([str(e) for e in range(gui_tree.g_max_level)])
         gui_sel_level.addItem("ALL")
         if self.g_selected_level == "ALL":
             gui_sel_level.setCurrentIndex(-1)
