@@ -259,8 +259,7 @@ class Tree(QTreeWidget):
                 if expand_counter < 0:
                     return
 
-    def changeSelectedLevel(self, level):
-        self.g_selected_level = level
+    def updateSelectedLevel(self):
         self.g_objects_to_dump = []
         self.iterateOverTree(self.cbSelectNodesBySelectedLevel)
 
@@ -298,7 +297,6 @@ class ExportComponentStep:
         # output dir for step
         self.utils = Utils()
         self.g_selected_directory = self.utils.getInitialOutputDir()
-        self.g_selected_level = "2"    # hier level to dump
         self.g_gui = {}                # store gui widgets for callbacks
 
     def exportSTEP(self):
@@ -324,12 +322,12 @@ class ExportComponentStep:
     def onLevelChanged(self):
         """ selected level changed """
         gui_sel_level = self.g_gui["gui_sel_level"]
+        gui_tree = self.g_gui["gui_tree"]
         current_selected_level = gui_sel_level.currentText()
-        if self.g_selected_level != current_selected_level:
-            self.g_selected_level = current_selected_level
+        if gui_tree.g_selected_level != current_selected_level:
+            gui_tree.g_selected_level = current_selected_level
             # highlight levels to be output
-            gui_tree = self.g_gui["gui_tree"]
-            gui_tree.changeSelectedLevel(self.g_selected_level)
+            gui_tree.updateSelectedLevel()
 
             # update button text with number of files to generate
             num = len(gui_tree.g_objects_to_dump)
@@ -350,7 +348,8 @@ class ExportComponentStep:
     def pretendLevelChanged(self):
         """Updates hier listbox tree"""
         # force level changed update callback
-        self.g_selected_level = -1
+        gui_tree = self.g_gui["gui_tree"]
+        gui_tree.g_selected_level = -1
         self.onLevelChanged()
 
     def setButtonStyle(self, btns):
@@ -400,10 +399,9 @@ class ExportComponentStep:
         self.g_gui["gui_sel_level"] = gui_sel_level
         gui_sel_level.addItems([str(e) for e in range(gui_tree.g_max_level)])
         gui_sel_level.addItem("ALL")
-        if self.g_selected_level == "ALL":
-            gui_sel_level.setCurrentIndex(-1)
-        else:
-            gui_sel_level.setCurrentIndex(int(self.g_selected_level))
+
+        index = 2 if (gui_tree.g_max_level > 2) else gui_tree.g_max_level
+        gui_sel_level.setCurrentIndex(index)
         gui_sel_level.currentTextChanged.connect(self.onLevelChanged)
 
         # editable line to hold target dir
