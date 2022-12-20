@@ -85,6 +85,24 @@ class Utils:
 
         return str(round(num))
 
+    def findFaces(self, selectionObject):
+        """
+        from TrimFace.py in
+            https://www.programcreek.com/python/example/103512/Part.Face
+        """
+        res = []
+        for obj in selectionObject:
+            if hasattr(obj, "HasSubObjects") and obj.HasSubObjects:
+                i = 0
+                for subobj in obj.SubObjects:
+                    if issubclass(type(subobj), App.Part.Face):
+                        f = (obj.Object, [obj.SubElementNames[i]])
+                        p = obj.PickedPoints[i]
+                        u, v = subobj.Surface.parameter(p)
+                        res.append((f, App.Vector(u, v, 0)))
+                    i += 1
+        return (res)
+
 
 class Tree(QTreeWidget):
     """
@@ -92,24 +110,24 @@ class Tree(QTreeWidget):
     """
     def __init__(self):
         super(Tree, self).__init__()
-        self.g_objects_to_dump = []    # list of objects to save as STEP
+        self.objects_to_dump = []    # list of objects to save as STEP
         self.cols = {                  # order of columns in tree
-            'label': 0, 'type': 1, 'Len': 2, 'XLen': 3, 'YLen': 4, 'ZLen': 5,
+            'Label': 0, 'Type': 1, 'Len': 2, 'XLen': 3, 'YLen': 4, 'ZLen': 5,
             'level': 6, 'obj': 7}      # undisplayed data colunms
-        self.g_column_count = len(self.cols)
-        self.g_max_level = 0           # max levels of hier in document
-        self.g_selected_level = "2"    # hier level to dump
-        self.g_nodes_to_prune = []     # leafs of tree with no shape
-        self.g_initial_open_nodes = 30  # open tree nodes on startup
+        self.column_count = len(self.cols)
+        self.max_level = 0           # max levels of hier in document
+        self.selected_level = "2"    # hier level to dump
+        self.initial_open_nodes = 30  # open tree nodes on startup
+        self.nodes_to_prune = []     # leafs of tree with no shape
         self.utils = Utils()
+        # ok, time to do stuff...
         self.setupTreeGui()
         self.populateTree()
 
     def setupTreeGui(self):
-        self.setColumnCount(self.g_column_count)
-        # TODO: use first 6 keys of self.cols
-        self.setHeaderLabels(
-                ["Name", "Type", "Len", "XLen", "YLen", "ZLen"])
+        self.setColumnCount(self.column_count)
+        # ["Label", "Type", "Len", "XLen", "YLen", "ZLen"])
+        self.setHeaderLabels(list(self.cols.keys())[:6])
         self.setColumnHidden(self.cols['obj'], True)   # hide data
         self.setColumnHidden(self.cols['level'], True)
         self.setSortingEnabled(True)
@@ -117,18 +135,28 @@ class Tree(QTreeWidget):
         header = self.header()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(self.cols['label'], QHeaderView.Stretch)
-        self.resizeColumnToContents(self.cols['label'])
+        header.setSectionResizeMode(self.cols['Label'], QHeaderView.Stretch)
+        self.resizeColumnToContents(self.cols['Label'])
         self.selectionModel().selectionChanged.connect(self.treeSelection)
 
-        self.setMinimumWidth(Gui.getMainWindow().width()/2)
-        self.setMinimumHeight(Gui.getMainWindow().height()/2)
+        self.setMinimumWidth(Gui.getMainWindow().width() / 2)
+        self.setMinimumHeight(Gui.getMainWindow().height() / 2)
+
+    def highlightObjAndFaces(self, objs):
+        Gui.Selection.clearSelection()
+        for obj in objs:
+            Gui.Selection.addSelection(obj)
+        faces = self.utils.findFaces(objs)
+        if faces:
+            Gui.Selection.addSelection(faces)
+        Gui.runCommand('Std_ShowSelection', 0)
 
     def treeSelection(self, selected, deselected):
-        Gui.Selection.clearSelection()
+        objs = []
         for node in self.selectedItems():
             obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
-            Gui.Selection.addSelection(obj)
+            objs.append(obj)
+        self.highlightObjAndFaces(objs)
 
     def populateTree(self):
         """
@@ -156,19 +184,19 @@ class Tree(QTreeWidget):
 
         """
         #  0      1   2   3    4    5     6   7
-        # label type Len XLen YLen Zlen level obj
+        # Label Type Len XLen YLen Zlen level obj
         cols = self.cols
 
         for obj in objs:
             node = QTreeWidgetItem(parent)
             node.setData(cols['obj'], QtCore.Qt.UserRole, obj)
             node.setData(cols['level'], QtCore.Qt.UserRole, level)
-            node.setText(cols['label'], obj.Label)
+            node.setText(cols['Label'], obj.Label)
             # <class 'Sketcher.SketchObject'> -> Sketcher.SketchObject
             typ = str(type(obj))
             typ = typ.replace("<class '", "")
             typ = typ.replace("'>", "")
-            node.setText(cols['type'], typ)
+            node.setText(cols['Type'], typ)
 
             if hasattr(obj, "Length"):
                 node.setText(cols['Len'], str(obj.Length.Value))
@@ -203,10 +231,10 @@ class Tree(QTreeWidget):
         """
         keep running until no leaf node without shape remains
         """
-        self.g_nodes_to_prune = []
+        self.nodes_to_prune = []
         self.iterateOverTree(self.cbSelectNonShapeNode)
-        if self.g_nodes_to_prune:
-            for node in self.g_nodes_to_prune:
+        if self.nodes_to_prune:
+            for node in self.nodes_to_prune:
                 parent = node.parent()
                 parent.removeChild(node)
             self.pruneNonShapeNodes()   # run again to cleanup dangling parent
@@ -226,10 +254,10 @@ class Tree(QTreeWidget):
         if hasattr(obj, "Shape"):
             return
 
-        self.g_nodes_to_prune.append(node)
+        self.nodes_to_prune.append(node)
 
     def determineMaxLevel(self):
-        self.g_max_level = 0
+        self.max_level = 0
         self.iterateOverTree(self.cbDetermineMaxLevel)
 
     def cbDetermineMaxLevel(self, node, param):
@@ -237,8 +265,8 @@ class Tree(QTreeWidget):
         tree iteration callback for determining max level
         """
         level = node.data(self.cols['level'], QtCore.Qt.UserRole)
-        if level > self.g_max_level:
-            self.g_max_level = level
+        if level > self.max_level:
+            self.max_level = level
 
     def expandTreeToSensibleLevel(self):
         # expand to some level initially
@@ -251,7 +279,7 @@ class Tree(QTreeWidget):
             iterator += 1
 
         # expand until counter exhausted
-        expand_counter = self.g_initial_open_nodes
+        expand_counter = self.initial_open_nodes
         for level in sorted(elements_per_level.keys()):
             for node in elements_per_level[level]:
                 node.setExpanded(True)
@@ -260,16 +288,17 @@ class Tree(QTreeWidget):
                     return
 
     def updateSelectedLevel(self):
-        self.g_objects_to_dump = []
+        self.objects_to_dump = []
         self.iterateOverTree(self.cbSelectNodesBySelectedLevel)
+        self.highlightObjAndFaces(self.objects_to_dump)
 
     def highlightNode(self, node):
         sel_bgcolor = "yellow"
-        for i in range(self.g_column_count):
+        for i in range(self.column_count):
             node.setBackgroundColor(i, QtGui.QColor(sel_bgcolor))
 
     def unhighlightNode(self, node):
-        for i in range(self.g_column_count):
+        for i in range(self.column_count):
             node.setData(i, QtCore.Qt.BackgroundRole, None)
 
     def cbSelectNodesBySelectedLevel(self, node, param):
@@ -277,15 +306,15 @@ class Tree(QTreeWidget):
         tree iteration callback collecting list of STEP objects to dump
         """
         self.unhighlightNode(node)
-        if self.g_selected_level:
+        if self.selected_level:
             # "ALL" is the only non-int string allowed in g_selected_level
             level = node.data(self.cols['level'], QtCore.Qt.UserRole)
-            if (self.g_selected_level == "ALL") or \
-               (int(self.g_selected_level) == level):
+            if (self.selected_level == "ALL") or \
+               (int(self.selected_level) == level):
                 obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
                 if hasattr(obj, "Shape"):
                     self.highlightNode(node)
-                    self.g_objects_to_dump.append(obj)
+                    self.objects_to_dump.append(obj)
 
 
 class ExportComponentStep:
@@ -296,50 +325,50 @@ class ExportComponentStep:
     def __init__(self):
         # output dir for step
         self.utils = Utils()
-        self.g_selected_directory = self.utils.getInitialOutputDir()
-        self.g_gui = {}                # store gui widgets for callbacks
+        self.selected_directory = self.utils.getInitialOutputDir()
+        self.gui = {}                # store gui widgets for callbacks
 
     def exportSTEP(self):
-        gui_tree = self.g_gui["gui_tree"]
-        for obj in gui_tree.g_objects_to_dump:
+        gui_tree = self.gui["gui_tree"]
+        for obj in gui_tree.objects_to_dump:
             filename = os.path.join(
-                    self.g_selected_directory, obj.Label + ".step")
+                self.selected_directory, obj.Label + ".step")
             filename = os.path.normpath(filename)
             print(f'exporting {obj.FullName} to {filename}')
             obj.Shape.exportStep(filename)
 
     def onDirDialogPopup(self):
         """Called selecting dir"""
-        gui_dir_line = self.g_gui["gui_dir_line"]
-        self.g_selected_directory = QtGui.QFileDialog.getExistingDirectory()
-        gui_dir_line.setText(self.g_selected_directory)
+        gui_txt_dir = self.gui["gui_txt_dir"]
+        self.selected_directory = QtGui.QFileDialog.getExistingDirectory()
+        gui_txt_dir.setText(self.selected_directory)
 
     def onDirLineEdited(self):
         """ selected level changed """
-        gui_dir_line = self.g_gui["gui_dir_line"]
-        self.g_selected_directory = str(gui_dir_line.text())
+        gui_txt_dir = self.gui["gui_txt_dir"]
+        self.selected_directory = str(gui_txt_dir.text())
 
     def onLevelChanged(self):
         """ selected level changed """
-        gui_sel_level = self.g_gui["gui_sel_level"]
-        gui_tree = self.g_gui["gui_tree"]
-        current_selected_level = gui_sel_level.currentText()
-        if gui_tree.g_selected_level != current_selected_level:
-            gui_tree.g_selected_level = current_selected_level
+        gui_box_level = self.gui["gui_box_level"]
+        gui_tree = self.gui["gui_tree"]
+        current_selected_level = gui_box_level.currentText()
+        if gui_tree.selected_level != current_selected_level:
+            gui_tree.selected_level = current_selected_level
             # highlight levels to be output
             gui_tree.updateSelectedLevel()
 
             # update button text with number of files to generate
-            num = len(gui_tree.g_objects_to_dump)
-            gui_gen_run = self.g_gui["gui_gen_run"]
-            gui_gen_run.setText(f'Generate {num} STEP files')
+            num = len(gui_tree.objects_to_dump)
+            gui_btn_run = self.gui["gui_btn_run"]
+            gui_btn_run.setText(f'Generate {num} STEP files')
 
     def onGenerate(self):
         """Called when generating step files"""
-        gui_dir_line = self.g_gui["gui_dir_line"]
-        self.g_selected_directory = str(gui_dir_line.text())
-        if not os.path.isdir(self.g_selected_directory):
-            msg = f'ERROR: dir does not exist - {self.g_selected_directory}'
+        gui_txt_dir = self.gui["gui_txt_dir"]
+        self.selected_directory = str(gui_txt_dir.text())
+        if not os.path.isdir(self.selected_directory):
+            msg = f'ERROR: dir does not exist - {self.selected_directory}'
             print(msg)
             App.Console.PrintError(msg + "\n")
             return
@@ -348,8 +377,8 @@ class ExportComponentStep:
     def pretendLevelChanged(self):
         """Updates hier listbox tree"""
         # force level changed update callback
-        gui_tree = self.g_gui["gui_tree"]
-        gui_tree.g_selected_level = -1
+        gui_tree = self.gui["gui_tree"]
+        gui_tree.selected_level = -1
         self.onLevelChanged()
 
     def setButtonStyle(self, btns):
@@ -390,47 +419,47 @@ class ExportComponentStep:
         and number of levels to export
         """
         gui_tree = Tree()
-        self.g_gui["gui_tree"] = gui_tree
+        self.gui["gui_tree"] = gui_tree
 
         # Build UI and show
         gui_dlg = QtGui.QDialog(Gui.getMainWindow(), QtCore.Qt.Tool)
 
-        gui_sel_level = QtGui.QComboBox(gui_dlg)
-        self.g_gui["gui_sel_level"] = gui_sel_level
-        gui_sel_level.addItems([str(e) for e in range(gui_tree.g_max_level)])
-        gui_sel_level.addItem("ALL")
+        gui_box_level = QtGui.QComboBox(gui_dlg)
+        self.gui["gui_box_level"] = gui_box_level
+        gui_box_level.addItems([str(e) for e in range(gui_tree.max_level)])
+        gui_box_level.addItem("ALL")
 
-        index = 2 if (gui_tree.g_max_level > 2) else gui_tree.g_max_level
-        gui_sel_level.setCurrentIndex(index)
-        gui_sel_level.currentTextChanged.connect(self.onLevelChanged)
+        index = 2 if (gui_tree.max_level > 2) else gui_tree.max_level
+        gui_box_level.setCurrentIndex(index)
+        gui_box_level.currentTextChanged.connect(self.onLevelChanged)
 
         # editable line to hold target dir
-        gui_dir_line = QtGui.QLineEdit(self.g_selected_directory, gui_dlg)
-        self.g_gui["gui_dir_line"] = gui_dir_line
-        # gui_dir_line.returnPressed.connect(self.onDirLineEdited)
+        gui_txt_dir = QtGui.QLineEdit(self.selected_directory, gui_dlg)
+        self.gui["gui_txt_dir"] = gui_txt_dir
+        # gui_txt_dir.returnPressed.connect(self.onDirLineEdited)
 
-        gui_dir_sel = QtGui.QPushButton("Select Output Dir", gui_dlg)
-        gui_dir_sel.clicked.connect(self.onDirDialogPopup)
-        self.g_gui["gui_dir_sel"] = gui_dir_sel
+        gui_btn_dir = QtGui.QPushButton("Select Output Dir", gui_dlg)
+        gui_btn_dir.clicked.connect(self.onDirDialogPopup)
+        self.gui["gui_btn_dir"] = gui_btn_dir
 
         gen_layout = QtGui.QHBoxLayout()
-        gen_layout.addWidget(gui_dir_sel)
-        gen_layout.addWidget(gui_dir_line)
+        gen_layout.addWidget(gui_btn_dir)
+        gen_layout.addWidget(gui_txt_dir)
         gen_layout.addWidget(QtGui.QLabel("Level : "))
-        gen_layout.addWidget(gui_sel_level)
+        gen_layout.addWidget(gui_box_level)
 
         button_box = QtGui.QDialogButtonBox()
 
-        gui_gen_run = button_box.addButton(
-                "Generate STEP", QtGui.QDialogButtonBox.AcceptRole)
-        self.g_gui["gui_gen_run"] = gui_gen_run
+        gui_btn_run = button_box.addButton(
+            "Generate STEP", QtGui.QDialogButtonBox.AcceptRole)
+        self.gui["gui_btn_run"] = gui_btn_run
         gui_btn_close = button_box.addButton(
-                "Close", QtGui.QDialogButtonBox.RejectRole)
+            "Close", QtGui.QDialogButtonBox.RejectRole)
 
         gui_btn_expand = button_box.addButton(
-                "Expand Tree", QtGui.QDialogButtonBox.ApplyRole)
+            "Expand Tree", QtGui.QDialogButtonBox.ApplyRole)
         gui_btn_collapse = button_box.addButton(
-                "Collapse Tree", QtGui.QDialogButtonBox.ApplyRole)
+            "Collapse Tree", QtGui.QDialogButtonBox.ApplyRole)
 
         gui_btn_expand.clicked.connect(gui_tree.expandAll)
         gui_btn_collapse.clicked.connect(gui_tree.collapseAll)
@@ -446,8 +475,8 @@ class ExportComponentStep:
 
         # set all button styles the same
         self.setButtonStyle(
-         [gui_dir_sel,
-          gui_btn_expand, gui_btn_collapse, gui_btn_close, gui_gen_run, ])
+            [gui_btn_dir,
+             gui_btn_expand, gui_btn_collapse, gui_btn_close, gui_btn_run, ])
 
         self.pretendLevelChanged()
         gui_tree.show()
