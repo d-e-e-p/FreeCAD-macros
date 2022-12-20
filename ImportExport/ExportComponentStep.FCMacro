@@ -119,9 +119,11 @@ class Tree(QTreeWidget):
         self.selected_level = "2"    # hier level to dump
         self.initial_open_nodes = 30  # open tree nodes on startup
         self.nodes_to_prune = []     # leafs of tree with no shape
+        self.nodes_to_icons = {}     # map of icons for tree in main window
         self.utils = Utils()
         # ok, time to do stuff...
         self.setupTreeGui()
+        self.getIconsForNodes()
         self.populateTree()
 
     def setupTreeGui(self):
@@ -158,9 +160,50 @@ class Tree(QTreeWidget):
             objs.append(obj)
         self.highlightObjAndFaces(objs)
 
+    def visitTree(self, parent):
+        print(f'visitTree parent = {parent}')
+        for i in range(parent.childCount()):
+            node = parent.child(i)
+            label = node.text(0)
+            icon = node.icon(0)
+            print(f'visitTree i={i} l={label}')
+            self.nodes_to_icons[label] = icon
+            self.visitTree(node)
+
+    def findChildByName(self, parent, name):
+        for i in range(parent.childCount()):
+            node = parent.child(i)
+            label = node.text(0)
+            if label == name:
+                return node
+
+        return None
+
+    def getIconsForNodes(self):
+        """
+        """
+        mw = Gui.getMainWindow()
+        trees = mw.findChildren(QTreeWidget)
+        if not trees:
+            return
+
+        tree = trees[0]
+        root = tree.invisibleRootItem()
+        if not root.childCount():
+            return
+
+        base = self.findChildByName(root.child(0), App.ActiveDocument.Label)
+        if base is None:
+            return
+
+        # ok, now visit every node under base and mark icon
+        self.nodes_to_icons = {}
+        self.visitTree(base)
+        print(self.nodes_to_icons)
+
     def populateTree(self):
         """
-        initial creation of hier nodes
+        initial creation of hier nodesa following document structure
         """
 
         objs = self.utils.getTopPartsInDocument()
@@ -197,6 +240,11 @@ class Tree(QTreeWidget):
             typ = typ.replace("<class '", "")
             typ = typ.replace("'>", "")
             node.setText(cols['Type'], typ)
+
+            if obj.Label in self.nodes_to_icons:
+                node.setIcon(0, self.nodes_to_icons[obj.Label])
+            else:
+                print(f' no icon for {obj.Label}')
 
             if hasattr(obj, "Length"):
                 node.setText(cols['Len'], str(obj.Length.Value))
@@ -247,7 +295,7 @@ class Tree(QTreeWidget):
             return
 
         level = node.data(self.cols['level'], QtCore.Qt.UserRole)
-        if level < 2:
+        if level < 1:
             return
 
         obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
