@@ -418,11 +418,12 @@ class ExportComponentStep:
 
     def exportSTEP(self):
         gui_tree = self.gui["gui_tree"]
-        basic = ""
-        html = """
-    <table>
+        num_files = len(gui_tree.objects_to_dump)
+        caption = f"ExportComponentStep : dumped {num_files} STEP files"
+        html = f"""
+    <table border="1" cellpadding="5" cellspacing="0">
       <tr>
-        <th>object</th>
+        <th>component</th>
         <th>file</th>
         <th>size</th>
       </tr>
@@ -433,24 +434,22 @@ class ExportComponentStep:
             filename = os.path.normpath(filename)
             txt = f'exporting {obj.FullName} to {filename}'
             print(txt, end="")
-            basic += txt
             obj.Shape.exportStep(filename)
             file_size = self.utils.human_size(os.path.getsize(filename))
             txt = f' ({file_size})'
             print(txt)
-            basic += txt
             filename = os.path.join(self.selected_directory,
                                     f'<strong>{obj.Label}</strong>' + ".step")
             html += f'''
             <tr>
              <td>{obj.FullName}</td>
              <td>{filename}</td>
-             <td>{file_size}</td>
+             <td align="right">{file_size}</td>
             </tr>
             '''
 
         html += "</table>"
-        self.message(basic, html)
+        self.message(caption, html)
 
     def onDirDialogPopup(self):
         """Called selecting dir"""
@@ -539,23 +538,25 @@ class ExportComponentStep:
             # https://stackoverflow.com/questions/56478207/why-is-the-first-button-blue-in-color-when-i-run-the-pyqt5-program
             btn.setFocusPolicy(QtCore.Qt.NoFocus)
 
-    def message(self, txt, html):
-        msgBox = QtGui.QMessageBox()
-        font = QFont('Monospace', 12, QFont.Monospace)
-        font.setStyleHint(QFont.TypeWriter)
-        font.setKerning(False)
-        font.setFixedPitch(True)
-        font.setWeight(QFont.Normal)
-        fm = QtGui.QFontMetrics(font)
-        fontWidth = fm.horizontalAdvance(txt)
-        fontWidth = fm.boundingRect(txt).width()
-        fontHeight = fm.height()
-        msgBox.setFont(font)
-        w = fontWidth / 4   # TODO: figure out why we need this factor
-        h = 24 * fontHeight
-        msgBox.setBaseSize(w, h)
-        msgBox.setText(html)
-        msgBox.exec_()
+    def message(self, caption, html):
+        gui_msg = QtGui.QDialog()
+        gui_msg.setWindowTitle(caption)
+
+        btn = QtGui.QDialogButtonBox.Ok
+        box = QtGui.QDialogButtonBox(btn)
+        box.accepted.connect(gui_msg.close)
+        layout = QtGui.QVBoxLayout()
+        label = QtGui.QLabel(html)
+        label.setTextInteractionFlags(
+          QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard)
+        scroll = QtGui.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(label)
+        layout.addWidget(scroll)
+        layout.addWidget(box)
+        gui_msg.setLayout(layout)
+
+        gui_msg.exec_()
 
     def setupGui(self):
         """
