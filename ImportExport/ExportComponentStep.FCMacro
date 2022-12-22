@@ -18,7 +18,7 @@
 # -*- coding: utf-8 -*-
 
 __Name__ = 'Export Component Step'
-__Comment__ = 'Export 3d STEP files of objects at selected hierarchy level'
+__Comment__ = 'Export 3d STEP files of all objects at selected hierarchy level'
 __Author__ = 'deep@tensorfield.ag'
 __Version__ = '1.0'
 __Date__ = '2022-12-13'
@@ -40,7 +40,7 @@ import FreeCAD as App
 import FreeCADGui as Gui
 
 from PySide import QtGui, QtCore
-from PySide.QtGui import QTreeWidget, QTreeWidgetItem
+from PySide.QtGui import QTreeWidget, QTreeWidgetItem, QFont
 from PySide.QtGui import QHeaderView, QTreeWidgetItemIterator
 
 
@@ -85,6 +85,35 @@ class Utils:
 
         return str(round(num))
 
+    def human_size(self, size_bytes):
+        """
+        https://stackoverflow.com/questions/1094841/get-human-readable-version-of-file-size
+        format a size in bytes into a 'human' file size, e.g.
+            bytes, KB, MB, GB, TB, PB
+        Note that bytes/KB will be reported in whole numbers but MB and above
+        will have greater precision e.g.
+            1 byte, 43 bytes, 443 KB, 4.3 MB, 4.43 GB, etc
+        """
+        if size_bytes == 1:
+            # because I really hate unnecessary plurals
+            return "1 byte"
+
+        suffixes_table = [
+          ('bytes', 0), ('KB', 0), ('MB', 1), ('GB', 2), ('TB', 2),  ('PB', 2)]
+
+        num = float(size_bytes)
+        for suffix, precision in suffixes_table:
+            if num < 1024.0:
+                break
+            num /= 1024.0
+
+        if precision == 0:
+            formatted_size = "%d" % num
+        else:
+            formatted_size = str(round(num, ndigits=precision))
+
+        return "%s %s" % (formatted_size, suffix)
+
     def findFaces(self, selectionObject):
         """
         from TrimFace.py in
@@ -108,28 +137,34 @@ class Tree(QTreeWidget):
     """
     wrapper for QTreeWidget with functions to populate and markup elements
     """
-    def __init__(self):
+    def __init__(self, callback):
         super(Tree, self).__init__()
-        self.objects_to_dump = []    # list of objects to save as STEP
-        self.cols = {                  # order of columns in tree
+        self.objects_to_dump = []     # list of objects to save as STEP
+        self.cols = {                 # order of columns in tree
             'Label': 0, 'Type': 1, 'Len': 2, 'XLen': 3, 'YLen': 4, 'ZLen': 5,
-            'level': 6, 'obj': 7}      # undisplayed data colunms
+            'level': 6, 'obj': 7}     # undisplayed data colunms
         self.column_count = len(self.cols)
-        self.max_level = 0           # max levels of hier in document
-        self.selected_level = "2"    # hier level to dump
+        self.max_level = 0            # max levels of hier in document
+        self.selected_level = "2"     # hier level to dump
         self.initial_open_nodes = 30  # open tree nodes on startup
-        self.nodes_to_prune = []     # leafs of tree with no shape
-        self.nodes_to_icons = {}     # map of icons for tree in main window
+        self.nodes_to_prune = []      # leafs of tree with no shape
+        self.nodes_to_icons = {}      # map of icons for tree in main window
         self.utils = Utils()
-        # ok, time to do stuff...
+        # callback to be set by caller
+        self.onLevelChangedInTree = callback
+        # enough setup--time to do stuff...
         self.setupTreeGui()
         self.getIconsForNodes()
         self.populateTree()
 
     def setupTreeGui(self):
         self.setColumnCount(self.column_count)
-        # ["Label", "Type", "Len", "XLen", "YLen", "ZLen"])
-        self.setHeaderLabels(list(self.cols.keys())[:6])
+
+        # ["Label", "Type", "Len", "XLen", "YLen", "ZLen", ...])
+        header_labels = list(self.cols.keys())
+        header_labels[0] = 'Label (click header to sort)'
+        self.setHeaderLabels(header_labels)
+
         self.setColumnHidden(self.cols['obj'], True)   # hide data
         self.setColumnHidden(self.cols['level'], True)
         self.setSortingEnabled(True)
@@ -144,43 +179,11 @@ class Tree(QTreeWidget):
         self.setMinimumWidth(Gui.getMainWindow().width() / 2)
         self.setMinimumHeight(Gui.getMainWindow().height() / 2)
 
-    def highlightObjAndFaces(self, objs):
-        Gui.Selection.clearSelection()
-        for obj in objs:
-            Gui.Selection.addSelection(obj)
-        faces = self.utils.findFaces(objs)
-        if faces:
-            Gui.Selection.addSelection(faces)
-        Gui.runCommand('Std_ShowSelection', 0)
-
-    def treeSelection(self, selected, deselected):
-        objs = []
-        for node in self.selectedItems():
-            obj = node.data(self.cols['obj'], QtCore.Qt.UserRole)
-            objs.append(obj)
-        self.highlightObjAndFaces(objs)
-
-    def visitTree(self, parent):
-        print(f'visitTree parent = {parent}')
-        for i in range(parent.childCount()):
-            node = parent.child(i)
-            label = node.text(0)
-            icon = node.icon(0)
-            print(f'visitTree i={i} l={label}')
-            self.nodes_to_icons[label] = icon
-            self.visitTree(node)
-
-    def findChildByName(self, parent, name):
-        for i in range(parent.childCount()):
-            node = parent.child(i)
-            label = node.text(0)
-            if label == name:
-                return node
-
-        return None
-
     def getIconsForNodes(self):
         """
+        use main window tree to get icon associated with each label
+        assume first tree has the data--this is optional so just
+        quit on the first sign of trouble.
         """
         mw = Gui.getMainWindow()
         trees = mw.findChildren(QTreeWidget)
@@ -196,21 +199,26 @@ class Tree(QTreeWidget):
         if base is None:
             return
 
-        # ok, now visit every node under base and mark icon
+        # ok, now visit every node under base and store icon
         self.nodes_to_icons = {}
-        self.visitTree(base)
-        print(self.nodes_to_icons)
+        self.visitAllTreeElements(base)
 
     def populateTree(self):
         """
         initial creation of hier nodesa following document structure
+        could clone() tree in main window instead, but then have to
+        find objects by label...
         """
 
         objs = self.utils.getTopPartsInDocument()
 
         self.clear()
         root = self.invisibleRootItem()
-        self.addChildren(objs, parent=root, level=0)
+        node = QTreeWidgetItem(root)
+        node.setText(0, App.ActiveDocument.Label)
+        node.setData(self.cols['obj'], QtCore.Qt.UserRole, objs)
+        node.setData(self.cols['level'], QtCore.Qt.UserRole, 0)
+        self.addChildren(objs, parent=node, level=1)
 
         # remove leaf nodes without shapes
         self.pruneNonShapeNodes()
@@ -220,6 +228,38 @@ class Tree(QTreeWidget):
 
         # open some top level tree elements
         self.expandTreeToSensibleLevel()
+
+    def highlightObjAndFaces(self, objs):
+        Gui.Selection.clearSelection()
+        for obj in objs:
+            Gui.Selection.addSelection(obj)
+        faces = self.utils.findFaces(objs)
+        if faces:
+            Gui.Selection.addSelection(faces)
+        Gui.runCommand('Std_ShowSelection', 0)
+
+    def treeSelection(self, selected, deselected):
+        for node in self.selectedItems():
+            level = node.data(self.cols['level'], QtCore.Qt.UserRole)
+            self.selected_level = level
+            self.onLevelChangedInTree(level)
+
+    def visitAllTreeElements(self, parent):
+        for i in range(parent.childCount()):
+            node = parent.child(i)
+            label = node.text(0)
+            icon = node.icon(0)
+            self.nodes_to_icons[label] = icon
+            self.visitAllTreeElements(node)
+
+    def findChildByName(self, parent, name):
+        for i in range(parent.childCount()):
+            node = parent.child(i)
+            label = node.text(0)
+            if label == name:
+                return node
+
+        return None
 
     def addChildren(self, objs=None, parent=None, level=0):
         """
@@ -378,12 +418,39 @@ class ExportComponentStep:
 
     def exportSTEP(self):
         gui_tree = self.gui["gui_tree"]
+        basic = ""
+        html = """
+    <table>
+      <tr>
+        <th>object</th>
+        <th>file</th>
+        <th>size</th>
+      </tr>
+        """
         for obj in gui_tree.objects_to_dump:
             filename = os.path.join(
                 self.selected_directory, obj.Label + ".step")
             filename = os.path.normpath(filename)
-            print(f'exporting {obj.FullName} to {filename}')
+            txt = f'exporting {obj.FullName} to {filename}'
+            print(txt, end="")
+            basic += txt
             obj.Shape.exportStep(filename)
+            file_size = self.utils.human_size(os.path.getsize(filename))
+            txt = f' ({file_size})'
+            print(txt)
+            basic += txt
+            filename = os.path.join(self.selected_directory,
+                                    f'<strong>{obj.Label}</strong>' + ".step")
+            html += f'''
+            <tr>
+             <td>{obj.FullName}</td>
+             <td>{filename}</td>
+             <td>{file_size}</td>
+            </tr>
+            '''
+
+        html += "</table>"
+        self.message(basic, html)
 
     def onDirDialogPopup(self):
         """Called selecting dir"""
@@ -396,7 +463,19 @@ class ExportComponentStep:
         gui_txt_dir = self.gui["gui_txt_dir"]
         self.selected_directory = str(gui_txt_dir.text())
 
-    def onLevelChanged(self):
+    def onLevelChangedInTree(self, level):
+        """
+        tree selected changes level by selecting object at different hier
+        """
+        gui_box_level = self.gui["gui_box_level"]
+        index = gui_box_level.findText(str(level))
+        if index != -1:
+            gui_box_level.setCurrentIndex(index)
+            self.onLevelChangedInBox()
+        else:
+            print(f'level = {level} not found in QComboBox')
+
+    def onLevelChangedInBox(self):
         """ selected level changed """
         gui_box_level = self.gui["gui_box_level"]
         gui_tree = self.gui["gui_tree"]
@@ -427,7 +506,7 @@ class ExportComponentStep:
         # force level changed update callback
         gui_tree = self.gui["gui_tree"]
         gui_tree.selected_level = -1
-        self.onLevelChanged()
+        self.onLevelChangedInBox()
 
     def setButtonStyle(self, btns):
         """
@@ -460,13 +539,31 @@ class ExportComponentStep:
             # https://stackoverflow.com/questions/56478207/why-is-the-first-button-blue-in-color-when-i-run-the-pyqt5-program
             btn.setFocusPolicy(QtCore.Qt.NoFocus)
 
+    def message(self, txt, html):
+        msgBox = QtGui.QMessageBox()
+        font = QFont('Monospace', 12, QFont.Monospace)
+        font.setStyleHint(QFont.TypeWriter)
+        font.setKerning(False)
+        font.setFixedPitch(True)
+        font.setWeight(QFont.Normal)
+        fm = QtGui.QFontMetrics(font)
+        fontWidth = fm.horizontalAdvance(txt)
+        fontWidth = fm.boundingRect(txt).width()
+        fontHeight = fm.height()
+        msgBox.setFont(font)
+        w = fontWidth / 4   # TODO: figure out why we need this factor
+        h = 24 * fontHeight
+        msgBox.setBaseSize(w, h)
+        msgBox.setText(html)
+        msgBox.exec_()
+
     def setupGui(self):
         """
         first setup tree to determine depth and other stats
         then create top gui elements to prompt for output dir
         and number of levels to export
         """
-        gui_tree = Tree()
+        gui_tree = Tree(self.onLevelChangedInTree)
         self.gui["gui_tree"] = gui_tree
 
         # Build UI and show
@@ -479,7 +576,7 @@ class ExportComponentStep:
 
         index = 2 if (gui_tree.max_level > 2) else gui_tree.max_level
         gui_box_level.setCurrentIndex(index)
-        gui_box_level.currentTextChanged.connect(self.onLevelChanged)
+        gui_box_level.currentTextChanged.connect(self.onLevelChangedInBox)
 
         # editable line to hold target dir
         gui_txt_dir = QtGui.QLineEdit(self.selected_directory, gui_dlg)
