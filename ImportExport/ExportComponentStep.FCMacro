@@ -566,14 +566,17 @@ class ExportComponentStep:
         """
         gui_tree = Tree(self.onLevelChangedInTree)
         self.gui["gui_tree"] = gui_tree
+        stylesheet = "font-family: Arial;font-style: normal;font-size: 12pt"
 
         # Build UI and show
         gui_dlg = QtGui.QDialog(Gui.getMainWindow(), QtCore.Qt.Tool)
+        gui_dlg.setWindowTitle(__Name__)
 
         gui_box_level = QtGui.QComboBox(gui_dlg)
         self.gui["gui_box_level"] = gui_box_level
         gui_box_level.addItems([str(e) for e in range(gui_tree.max_level)])
         gui_box_level.addItem("ALL")
+        gui_box_level.setStyleSheet(stylesheet)
 
         index = 2 if (gui_tree.max_level > 2) else gui_tree.max_level
         gui_box_level.setCurrentIndex(index)
@@ -581,11 +584,13 @@ class ExportComponentStep:
 
         # editable line to hold target dir
         gui_txt_dir = QtGui.QLineEdit(self.selected_directory, gui_dlg)
+        gui_txt_dir.setStyleSheet(stylesheet)
         self.gui["gui_txt_dir"] = gui_txt_dir
         # gui_txt_dir.returnPressed.connect(self.onDirLineEdited)
 
         gui_btn_dir = QtGui.QPushButton("Select Output Dir", gui_dlg)
         gui_btn_dir.clicked.connect(self.onDirDialogPopup)
+        gui_btn_dir.setStyleSheet(stylesheet)
         self.gui["gui_btn_dir"] = gui_btn_dir
 
         gen_layout = QtGui.QHBoxLayout()
