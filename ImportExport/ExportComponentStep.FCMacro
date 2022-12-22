@@ -594,6 +594,7 @@ class ExportComponentStep:
 
         btn = QtGui.QDialogButtonBox.Ok
         box = QtGui.QDialogButtonBox(btn)
+        self.setButtonStyle([box])
         box.accepted.connect(gui_msg.close)
         layout = QtGui.QVBoxLayout()
         label = QtGui.QLabel(html)
