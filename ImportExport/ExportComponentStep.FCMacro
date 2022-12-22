@@ -466,9 +466,12 @@ class ExportComponentStep:
     def exportSTEP(self):
         gui_tree = self.gui["gui_tree"]
         num_files = len(gui_tree.objects_to_dump)
-        caption = f"ExportComponentStep : dumped {num_files} STEP files"
-        html = """
+        title = f"ExportComponentStep : dumped {num_files} STEP files"
+        output_dir = os.path.normpath(self.selected_directory)
+        caption = f"Output dir: {output_dir}"
+        html = f"""
     <table border="1" cellpadding="5" cellspacing="0">
+      <caption><strong>{caption}</strong></caption>
       <tr>
         <th>component</th>
         <th>file</th>
@@ -485,18 +488,17 @@ class ExportComponentStep:
             file_size = self.utils.human_size(os.path.getsize(filename))
             txt = f' ({file_size})'
             print(txt)
-            filename = os.path.join(self.selected_directory,
-                                    f'<strong>{obj.Label}</strong>' + ".step")
+            filename = f'<strong>{obj.Label}</strong>.step'
             html += f'''
             <tr>
              <td>{obj.FullName}</td>
-             <td>{filename}</td>
+             <td align="right">{filename}</td>
              <td align="right">{file_size}</td>
             </tr>
             '''
 
         html += "</table>"
-        self.message(caption, html)
+        self.message(title, html)
 
     def onDirDialogPopup(self):
         """Called selecting dir"""
@@ -597,11 +599,15 @@ class ExportComponentStep:
         label = QtGui.QLabel(html)
         label.setTextInteractionFlags(
           QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard)
+        stylesheet = "font-family: Courier;font-style: normal;font-size: 10pt;"
+        label.setStyleSheet(stylesheet)
+        label.adjustSize()
         scroll = QtGui.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(label)
         layout.addWidget(scroll)
         layout.addWidget(box)
+        layout.setSizeConstraint(QtGui.QLayout.SetMinimumSize)
         gui_msg.setLayout(layout)
 
         gui_msg.exec_()
