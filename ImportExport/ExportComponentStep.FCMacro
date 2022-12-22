@@ -40,7 +40,7 @@ import FreeCAD as App
 import FreeCADGui as Gui
 
 from PySide import QtGui, QtCore
-from PySide.QtGui import QTreeWidget, QTreeWidgetItem, QFont
+from PySide.QtGui import QTreeWidget, QTreeWidgetItem
 from PySide.QtGui import QHeaderView, QTreeWidgetItemIterator
 
 
@@ -168,8 +168,11 @@ class Tree(QTreeWidget):
         self.setColumnHidden(self.cols['obj'], True)   # hide data
         self.setColumnHidden(self.cols['level'], True)
         self.setSortingEnabled(True)
+        self.setStyleSheet(self.getTableStyle())
 
         header = self.header()
+        stylesheet = "font-family: Ariel;font-style: bold;font-size: 12pt;"
+        header.setStyleSheet(stylesheet)
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setStretchLastSection(False)
         header.setSectionResizeMode(self.cols['Label'], QHeaderView.Stretch)
@@ -404,6 +407,50 @@ class Tree(QTreeWidget):
                     self.highlightNode(node)
                     self.objects_to_dump.append(obj)
 
+    def getTableStyle(self):
+        """
+        make table header stand out
+
+        """
+        stylesheet = """
+        font-family: Ariel;font-style: normal;font-size: 10pt;
+        QHeaderView::section {
+            font-size: 12pt;
+            font-style: bold;
+        }
+
+        QTreeView {
+            show-decoration-selected: 1;
+        }
+
+        QTreeView::item {
+            border: 1px solid #d9d9d9;
+            border-top-color: transparent;
+            border-bottom-color: transparent;
+        }
+
+        QTreeView::item:hover {
+            background: qlineargradient(
+                x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #e7effd, stop: 1 #cbdaf1);
+            border: 1px solid #bfcde4;
+        }
+
+        QTreeView::item:selected {
+            border: 1px solid #567dbc;
+        }
+
+        QTreeView::item:selected:active{
+            background: qlineargradient(
+                x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #6ea1f1, stop: 1 #567dbc);
+        }
+
+        QTreeView::item:selected:!active {
+            background: qlineargradient(
+                x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #6b9be8, stop: 1 #577fbf);
+        }
+        """
+        return stylesheet
+
 
 class ExportComponentStep:
     """
@@ -420,7 +467,7 @@ class ExportComponentStep:
         gui_tree = self.gui["gui_tree"]
         num_files = len(gui_tree.objects_to_dump)
         caption = f"ExportComponentStep : dumped {num_files} STEP files"
-        html = f"""
+        html = """
     <table border="1" cellpadding="5" cellspacing="0">
       <tr>
         <th>component</th>
@@ -513,6 +560,7 @@ class ExportComponentStep:
 
         """
         stylesheet = """
+        font-family: Ariel;font-style: normal;font-size: 12pt;
         QPushButton {
             background-color: rgb(220, 225, 225);
             border: 2px outset rgb(150, 155, 155);
@@ -566,7 +614,7 @@ class ExportComponentStep:
         """
         gui_tree = Tree(self.onLevelChangedInTree)
         self.gui["gui_tree"] = gui_tree
-        stylesheet = "font-family: Arial;font-style: normal;font-size: 12pt"
+        stylesheet = "font-family: Ariel;font-style: normal;font-size: 12pt"
 
         # Build UI and show
         gui_dlg = QtGui.QDialog(Gui.getMainWindow(), QtCore.Qt.Tool)
@@ -593,10 +641,13 @@ class ExportComponentStep:
         gui_btn_dir.setStyleSheet(stylesheet)
         self.gui["gui_btn_dir"] = gui_btn_dir
 
+        gui_label = QtGui.QLabel("Level : ")
+        gui_label.setStyleSheet(stylesheet)
+
         gen_layout = QtGui.QHBoxLayout()
         gen_layout.addWidget(gui_btn_dir)
         gen_layout.addWidget(gui_txt_dir)
-        gen_layout.addWidget(QtGui.QLabel("Level : "))
+        gen_layout.addWidget(gui_label)
         gen_layout.addWidget(gui_box_level)
 
         button_box = QtGui.QDialogButtonBox()
