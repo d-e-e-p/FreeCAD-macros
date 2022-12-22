@@ -29,7 +29,7 @@ __Icon__ = ''
 __Help__ = 'Select level & output dir, then click generate to dump STEP files'
 __Status__ = 'Beta'
 __Requires__ = 'FreeCAD >= 0.17'
-__Communication__ = 'https://forum.freecadweb.org/viewtopic.php?tbd'
+__Communication__ = 'https://forum.freecadweb.org/viewtopic.php?f=22&t=74697'
 __Files__ = ''
 
 import os
